@@ -123,13 +123,70 @@ async function render() {
   if (selectedMarket) renderDrawer(selectedMarket)
 }
 function renderCreate() {
-  $('view').innerHTML = `<main class="grid create-grid">
-    <section class="panel step"><h2>1. Choose collateral token</h2><label>Token contract address<input id="collateral" placeholder="0x…"></label><button id="fetchToken">Fetch token</button><div id="tokenCard" class="token-card"><strong>Token not loaded</strong></div><h3>Existing markets for same token</h3><div id="sameMarkets" class="muted">Enter a token address to check.</div></section>
-    <section class="panel step"><h2>2. Choose funding terms</h2><div class="two"><label>Amount of token to lock<input id="amount" placeholder="1000"></label><label>USDC you want to raise<input id="raise" placeholder="500"></label></div><div class="two"><label>USDC you will repay<input id="repay" placeholder="550"></label><label>Repayment deadline<input id="maturity" type="datetime-local"></label></div><div class="two"><label>Reclaim window (days)<input id="window" value="7"></label><label>List P amount (% default)<input id="listPct" value="100"></label></div><details><summary>Advanced customization</summary><div class="two"><label>Final P amount to list<input id="listAmount"></label><label>Final P sale price (USDC)<input id="listPrice"></label></div><div class="two"><label>Market name prefix<input id="namePrefix" value="opl TOKEN"></label><label>Market symbol prefix<input id="symbolPrefix" value="oplTOKEN"></label></div></details></section>
-    <section class="panel step preview"><h2>3. Preview</h2><div id="preview"></div><p class="notice">Vault terms are fixed after creation. P listing price is customizable until the listing is created. If you do not exercise N, P holders may redeem collateral.</p></section>
-    <section class="panel step actions"><h2>4. Create vault</h2><button id="createVault">Create vault (${CREATION_FEE_ETH} ETH)</button><div id="created"></div></section>
-    <section class="panel step actions"><h2>5. Lock collateral and mint P/N</h2><button id="approveCollateral">Approve collateral</button><button id="mint">Lock collateral / mint P/N</button><div id="minted"></div></section>
-    <section class="panel step actions"><h2>6. List P for USDC</h2>${MARKETPLACE_ADDRESS ? '<button id="approveP">Approve P</button><button id="listP">Create sale</button>' : '<p class="notice">Marketplace contract not deployed yet. You can create markets and mint P/N now, but official P sales are disabled.</p>'}</section>
+  $('view').innerHTML = `<main class="composer-shell">
+    <aside class="composer-rail panel">
+      <p class="rail-kicker">New position</p>
+      <h2>Option-backed market</h2>
+      <p class="rail-copy">Compose fixed vault terms first. Funding only starts after P lender claims are sold for USDC.</p>
+      <div class="rail-steps" aria-label="Composer sections">
+        <div class="rail-step active"><b>1</b><span><strong>Collateral</strong><small>Select custom ERC20</small></span></div>
+        <div class="rail-line"></div>
+        <div class="rail-step active"><b>2</b><span><strong>Economics</strong><small>Raise, repay, deadline</small></span></div>
+        <div class="rail-line"></div>
+        <div class="rail-step"><b>3</b><span><strong>Activation</strong><small>Mint P/N, then list P</small></span></div>
+      </div>
+      <div class="protocol-note">
+        <strong>Protocol shape</strong>
+        <span>No oracle · no liquidation · no health factor · fixed exercise window</span>
+      </div>
+    </aside>
+
+    <section class="composer-main panel">
+      <div class="composer-toolbar">
+        <div>
+          <p class="eyebrow muted">Create Market</p>
+          <h2>Borrow / Raise USDC</h2>
+          <p>Lock collateral, mint a P lender claim and N reclaim option, then choose whether to list all or part of P.</p>
+        </div>
+        <button id="resetComposer" class="secondary">Reset</button>
+      </div>
+
+      <div class="composer-card">
+        <div class="card-head"><div><h3>Collateral asset</h3><p>Use any compatible ERC20 collateral. Existing markets for the same token remain visible but do not block a new market.</p></div><span class="pill">Custom ERC20</span></div>
+        <label>Token contract address<input id="collateral" placeholder="0x…"></label>
+        <div class="inline-actions"><button id="fetchToken" class="secondary">Fetch token</button><div id="tokenCard" class="asset-chip"><strong>Token not loaded</strong><span>Enter an ERC20 address to fetch name, symbol, decimals and wallet balance.</span></div></div>
+        <div id="sameMarkets" class="market-strip muted">No token selected.</div>
+      </div>
+
+      <div class="composer-card">
+        <div class="card-head"><div><h3>Market economics</h3><p>These are the human terms. The raise amount pre-fills the later P sale but is not stored in the vault.</p></div><span class="pill">Fixed terms</span></div>
+        <div class="input-matrix">
+          <label>Collateral to lock<input id="amount" placeholder="1000"></label>
+          <label>USDC to raise<input id="raise" placeholder="500"></label>
+          <label>USDC repay to reclaim<input id="repay" placeholder="550"></label>
+          <label>Repayment deadline<input id="maturity" type="datetime-local"></label>
+          <label>Reclaim window, days<input id="window" value="7"></label>
+          <label>P listed by default, %<input id="listPct" value="100"></label>
+        </div>
+        <details class="advanced-composer"><summary>Advanced listing and naming</summary><div class="input-matrix"><label>Final P amount to list<input id="listAmount"></label><label>Final P sale price, USDC<input id="listPrice"></label><label>Market name prefix<input id="namePrefix" value="opl TOKEN"></label><label>Market symbol prefix<input id="symbolPrefix" value="oplTOKEN"></label></div></details>
+      </div>
+
+      <div class="composer-card activation-card">
+        <div class="card-head"><div><h3>Activate market</h3><p>Create the vault, lock collateral to mint P/N, then list P when a marketplace is deployed.</p></div><span class="pill">${CREATION_FEE_ETH} ETH fee</span></div>
+        <div class="activation-grid">
+          <div class="activation-tile"><span>Create vault</span><button id="createVault">Create market</button><div id="created"></div></div>
+          <div class="activation-tile"><span>Lock collateral</span><button id="approveCollateral" class="secondary">Approve collateral</button><button id="mint">Mint P/N</button><div id="minted"></div></div>
+          <div class="activation-tile"><span>List lender claim</span>${MARKETPLACE_ADDRESS ? '<button id="approveP" class="secondary">Approve P</button><button id="listP">List P for USDC</button>' : '<p class="notice">Marketplace contract not deployed yet. You can create markets and mint P/N now, but official P sales are disabled.</p>'}</div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="composer-summary panel">
+      <p class="rail-kicker">Live preview</p>
+      <h2>Position terms</h2>
+      <div id="preview" class="preview-stack"></div>
+      <div class="risk-box"><strong>Important</strong><span>Vault terms are fixed after creation. P sale amount and price remain editable until the listing is created. If N is not exercised, P holders receive the collateral fallback.</span></div>
+    </aside>
   </main>`
   let token = { symbol: 'TOKEN', decimals: 18, balance: 0n }, createdVault = '', pToken = '', nToken = ''
   const inputs = ['amount', 'raise', 'repay', 'maturity', 'window', 'listPct', 'listAmount', 'listPrice']
@@ -139,15 +196,19 @@ function renderCreate() {
     if (!$('listPrice').value) $('listPrice').placeholder = raise
     const listAmount = $('listAmount').value || $('listAmount').placeholder || '0', price = $('listPrice').value || $('listPrice').placeholder || '0'
     const deadline = $('maturity').value ? Math.floor(new Date($('maturity').value).getTime() / 1000) + Number($('window').value || 0) * 86400 : 0
-    $('preview').innerHTML = metric('You lock', `${amount || 0} ${token.symbol}`) + metric('You receive', `${amount || 0} P + ${amount || 0} N`) + metric('You plan to list', `${listAmount} P`) + metric('You want to raise', `${price} USDC`) + metric('You keep', 'N reclaim option') + metric('To reclaim collateral later', `Repay ${repay || 0} USDC`) + metric('Factory creation fee', `${CREATION_FEE_ETH} ETH`) + metric('Lender max APR if exercised', `${apr(Number(price), Number(repay) * (Number(listAmount) / Number(amount || 1)), nowSec(), deadline).toFixed(2)}%`) + metric('Borrower cost APR', `${costApr(Number(price) * 0.999, Number(repay) * (Number(listAmount) / Number(amount || 1)), nowSec(), deadline).toFixed(2)}%`) + metric('No liquidation', 'No oracle, no health factor')
+    const partialRepay = Number(repay || 0) * (Number(listAmount) / Number(amount || 1))
+    const sellerReceives = Number(price || 0) * (1 - Number(SALE_FEE_BPS) / 10000)
+    $('preview').innerHTML = metric('You lock', `${amount || 0} ${token.symbol}`) + metric('You receive', `${amount || 0} P + ${amount || 0} N`) + metric('You plan to list', `${listAmount} P`) + metric('Target raise', `${price} USDC`) + metric('Seller receives after 0.1% fee', `${sellerReceives.toFixed(2)} USDC`) + metric('You keep', 'N reclaim option') + metric('Repay to reclaim collateral', `${repay || 0} USDC`) + metric('Lender max APR if exercised', `${apr(Number(price), partialRepay, nowSec(), deadline).toFixed(2)}%`) + metric('Borrower cost APR', `${costApr(sellerReceives, partialRepay, nowSec(), deadline).toFixed(2)}%`) + metric('Factory creation fee', `${CREATION_FEE_ETH} ETH`)
   }
   inputs.forEach((id) => $(id).oninput = update)
+  $('resetComposer').onclick = () => renderCreate()
   $('fetchToken').onclick = async () => {
     const a = $('collateral').value.trim(); if (!isAddress(a)) return status('Invalid token address', true)
-    token = await tokenInfo(getAddress(a)); $('tokenCard').innerHTML = `<strong>${token.name}</strong><span>${token.symbol} · ${token.decimals} decimals</span><span>Wallet balance: ${fmt(token.balance, token.decimals)} ${token.symbol}</span>`
+    token = await tokenInfo(getAddress(a)); $('tokenCard').innerHTML = `<strong>${token.name}</strong><span>${token.symbol} · ${token.decimals} decimals · Balance ${fmt(token.balance, token.decimals)} ${token.symbol}</span>`
     $('namePrefix').value = `opl ${token.symbol}`; $('symbolPrefix').value = `opl${token.symbol}`
     const same = markets.filter((m) => m.collateral.toLowerCase() === a.toLowerCase())
-    $('sameMarkets').innerHTML = same.length ? same.map((m) => `<div class="mini-row"><span>${short(m.vault)}</span><b>${m.status}</b><span>${fmt(m.collateralPool, m.decimals)} locked</span></div>`).join('') : 'No matching markets found. Creating another market for the same token is allowed.'
+    $('sameMarkets').innerHTML = same.length ? same.map((m) => `<button class="market-pill" data-open="${m.vault}"><b>${m.status}</b><span>${short(m.vault)} · ${fmt(m.collateralPool, m.decimals)} ${m.symbol} locked</span></button>`).join('') : '<span>No matching markets found. Creating another market for the same token is allowed.</span>'
+    document.querySelectorAll('[data-open]').forEach((b) => b.onclick = () => { selectedMarket = markets.find((m) => m.vault === b.dataset.open); renderDrawer(selectedMarket) })
     update()
   }
   $('createVault').onclick = async () => {
@@ -161,8 +222,13 @@ function renderCreate() {
   }
   $('approveCollateral').onclick = async () => { const c = await contract(getAddress($('collateral').value), abis.LegToken, true); await send('Approve collateral', () => c.approve(createdVault, parseSafe($('amount').value, token.decimals))) }
   $('mint').onclick = async () => { const v = await contract(createdVault, abis.SplitVault, true); await send('Lock collateral and mint P/N', () => v.mint(parseSafe($('amount').value, token.decimals))); const p = await contract(pToken, abis.LegToken), n = await contract(nToken, abis.LegToken); $('minted').innerHTML = addr('P token', pToken) + addr('N token', nToken) + metric('P balance', fmt(await p.balanceOf(account), token.decimals)) + metric('N balance', fmt(await n.balanceOf(account), token.decimals)) }
+  if (MARKETPLACE_ADDRESS) {
+    $('approveP').onclick = async () => { const p = await contract(pToken, abis.LegToken, true); await send('Approve P lender claim', () => p.approve(MARKETPLACE_ADDRESS, parseSafe($('listAmount').value || $('listAmount').placeholder, token.decimals))) }
+    $('listP').onclick = async () => { const mp = await contract(MARKETPLACE_ADDRESS, abis.FixedPricePSale, true); await send('List P for USDC', () => mp.createSale(pToken, BASE_USDC, parseSafe($('listAmount').value || $('listAmount').placeholder, token.decimals), calcPriceWad($('listPrice').value || $('listPrice').placeholder, $('listAmount').value || $('listAmount').placeholder, token.decimals))) }
+  }
   update()
 }
+
 function renderMarkets() {
   const groups = markets.reduce((m, x) => ((m[x.collateral.toLowerCase()] ||= []).push(x), m), {})
   $('view').innerHTML = `<main class="panel markets"><div class="markets-head"><div><h2>Borrow / Lend</h2><p>All vaults from the factory grouped by collateral token. Creating a vault is not active lending; funding begins when P is sold for USDC.</p></div><button id="refresh">Refresh markets</button></div><div id="groups">${Object.values(groups).length ? Object.values(groups).map(groupHtml).join('') : '<p class="muted">No vaults found from the factory yet.</p>'}</div></main>`
