@@ -5,7 +5,7 @@ const MARKETPLACE_ADDRESS = ''
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'
 const CREATION_FEE_ETH = '0.001'
 const SALE_FEE_BPS = 10n
-const DEMO_MODE = true
+const DEMO_MODE = false
 const BASE_RPC = 'https://mainnet.base.org'
 const WAD = 10n ** 18n
 const STORAGE_KEY = 'pmfi-option-backed-plans-v2'
@@ -17,24 +17,9 @@ let signer
 let account = ''
 let abis = {}
 let activeTab = 'borrow'
-let selectedLendId = 'demo-arb'
+let selectedLendId = ''
 let notice = ''
 let markets = []
-
-const demoMarkets = [
-  { id: 'demo-arb', demo: true, token: 'ARB', name: 'Arbitrum', logo: 'arb', raise: 500, repay: 550, term: '6m', apr: 20.4, available: 180, collateral: 1000, deadline: 'Jan 9, 2026', status: 'Open' },
-  { id: 'demo-op', demo: true, token: 'OP', name: 'Optimism', logo: 'op', raise: 900, repay: 972, term: '3m', apr: 10.7, available: 420, collateral: 2200, deadline: 'Oct 12, 2025', status: 'Open' },
-  { id: 'demo-uni', demo: true, token: 'UNI', name: 'Uniswap', logo: 'uni', raise: 1200, repay: 1320, term: '12m', apr: 10.0, available: 1200, collateral: 1500, deadline: 'Mar 20, 2026', status: 'Open' },
-  { id: 'demo-aave', demo: true, token: 'AAVE', name: 'Aave', logo: 'aave', raise: 700, repay: 756, term: '6m', apr: 8.0, available: 260, collateral: 18, deadline: 'Jan 9, 2026', status: 'Open' },
-]
-const demoBorrowPositions = [
-  { token: 'ARB', name: 'Arbitrum', logo: 'arb', locked: '1,000 ARB', repay: '550 USDC', deadline: 'Jan 9, 2026', status: 'Active' },
-  { token: 'OP', name: 'Optimism', logo: 'op', locked: '600 OP', repay: '240 USDC', deadline: 'Oct 12, 2025', status: 'Funded' },
-]
-const demoLendPositions = [
-  { token: 'ARB', name: 'Arbitrum', logo: 'arb', funded: '180 USDC', receive: '198 USDC', deadline: 'Jan 9, 2026', status: 'Active' },
-  { token: 'UNI', name: 'Uniswap', logo: 'uni', funded: '400 USDC', receive: '436 USDC', deadline: 'Mar 20, 2026', status: 'Active' },
-]
 
 function fmt(value, decimals = 18, max = 4) {
   try {
@@ -80,7 +65,7 @@ function fallbackProvider() {
 }
 async function contract(address, abi, writable = false) { return new Contract(address, abi, writable && signer ? signer : (provider || fallbackProvider())) }
 async function connect() {
-  if (!window.ethereum) return status('No injected wallet found. You can still preview the PMFI interface in demo mode.', true)
+  if (!window.ethereum) return status('No injected wallet found. Connect a wallet to fetch balances and create positions.', true)
   provider = new BrowserProvider(window.ethereum)
   await provider.send('eth_requestAccounts', [])
   signer = await provider.getSigner()
@@ -119,15 +104,15 @@ async function loadOnchainMarkets() {
       const plan = plans[vault.toLowerCase()] || {}
       const raise = Number(plan.targetRaiseUsdc || 0)
       const repay = Number(plan.repayUsdc || 0)
-      return { id: vault, vault, demo: false, token: symbol, name, logo: 'custom', decimals: Number(decimals), raise, repay, term: 'Fixed', apr: apr(raise, repay, nowSec(), Number(exerciseDeadline)), available: Number(fmt(pBalance, Number(decimals), 6)), collateral: Number(plan.collateralAmount || fmt(pSupply, Number(decimals), 6)), deadline: new Date(Number(maturity) * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }), status: settled ? 'Redeemable' : 'Open', pToken, nToken, strikeWad }
+      return { id: vault, vault, token: symbol, name, logo: 'custom', decimals: Number(decimals), raise, repay, term: 'Fixed', apr: apr(raise, repay, nowSec(), Number(exerciseDeadline)), available: Number(fmt(pBalance, Number(decimals), 6)), collateral: Number(plan.collateralAmount || fmt(pSupply, Number(decimals), 6)), deadline: new Date(Number(maturity) * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }), status: settled ? 'Redeemable' : 'Open', pToken, nToken, strikeWad }
     }))
     notice = ''
   } catch (error) {
     markets = []
-    notice = `Live Base reads are unavailable right now. Showing clearly labelled demo data instead. ${error.shortMessage || error.message || ''}`
+    notice = 'Live market data is unavailable right now. You can still paste a collateral token and create a borrow position.'
   }
 }
-function visibleMarkets() { return DEMO_MODE || markets.length === 0 ? demoMarkets : markets }
+function visibleMarkets() { return markets }
 function selectedMarket() { return visibleMarkets().find((m) => m.id === selectedLendId) || visibleMarkets()[0] }
 function tabCopy() {
   if (activeTab === 'borrow') return 'Raise USDC by locking token collateral. No oracle. No liquidation. Fixed repayment.'
@@ -140,7 +125,7 @@ async function render() {
     app.innerHTML = `<div class="shell">
       <header class="topbar"><p>${tabCopy()}</p><button id="connect" class="connect">${account ? short(account) : 'Connect wallet'}</button></header>
       <nav class="tabs" aria-label="Main tabs"><button data-tab="borrow" class="${activeTab === 'borrow' ? 'active' : ''}">Borrow</button><button data-tab="lend" class="${activeTab === 'lend' ? 'active' : ''}">Lend</button><button data-tab="portfolio" class="${activeTab === 'portfolio' ? 'active' : ''}">Portfolio</button></nav>
-      <div id="notice" class="notice" ${notice || DEMO_MODE ? '' : 'hidden'}>${DEMO_MODE ? `<strong>Demo mode.</strong> Example rows are labelled demo data for preview; live contract reads remain supported.${notice ? ` ${notice}` : ''}` : notice}</div>
+      <div id="notice" class="notice" ${notice ? '' : 'hidden'}>${notice}</div>
       <main id="view"></main>
     </div>`
     $('connect').onclick = connect
@@ -158,44 +143,45 @@ function renderBorrow() {
     <div class="card form-card">
       <div class="card-head"><h2>Create borrow position</h2><span>Custom ERC20</span></div>
       <label>Collateral token</label>
-      <div class="search-input"><span>⌕</span><input id="collateral" placeholder="Search token or paste contract address"><button id="fetchToken" class="chevron">⌄</button></div>
-      <div id="tokenBox" class="token-select">${tokenIcon('arb')}<div><strong>ARB <em>Demo token</em></strong><small>Arbitrum</small></div><div class="balance"><small>Balance</small><strong>10,000 ARB</strong></div><span>⌄</span></div>
-      <label>Amount to lock</label><div class="amount-row"><input id="lockAmount" value="1000"><button id="maxLock">MAX</button></div><p class="hint" id="balanceHint">Balance 10,000 ARB</p>
-      <div class="quick-row"><button data-pct="25">25%</button><button data-pct="50">50%</button><button data-pct="75">75%</button><button data-pct="100" class="active">MAX</button></div>
-      <div class="two-cols"><label>USDC to raise ${infoTip()}<div class="unit-input"><input id="raiseUsdc" value="500"><span>◉ USDC</span></div></label><label>Repay to reclaim ${infoTip()}<div class="unit-input"><input id="repayUsdc" value="550"><span>◉ USDC</span></div></label></div>
-      <label>Term ${infoTip()}</label><div class="term-row"><button data-months="1">1m</button><button data-months="3">3m</button><button data-months="6" class="active">6m</button><button data-months="9">9m</button><button data-months="12">12m</button></div>
+      <div class="search-input"><span>⌕</span><input id="collateral" placeholder="Paste token contract address"><button id="fetchToken" class="fetch-btn">Fetch</button></div>
+      <div id="tokenBox" class="token-summary" hidden></div>
+      <label>Amount to lock</label><div class="amount-row"><input id="lockAmount" placeholder="0.00"><label class="switch"><input id="useMax" type="checkbox"><span></span>Use max</label></div><p class="hint" id="balanceHint">Connect wallet and fetch a token to see your balance.</p>
+      <div class="two-cols"><label>USDC to raise ${infoTip()}<div class="unit-input"><input id="raiseUsdc" placeholder="0"><span>USDC</span></div></label><label>Repay to reclaim ${infoTip()}<div class="unit-input"><input id="repayUsdc" placeholder="0"><span>USDC</span></div></label></div>
+      <label>Term ${infoTip()} <strong id="termLabel" class="term-label">6 months</strong></label>
       <input id="termMonths" type="range" min="1" max="12" value="6">
       <button id="createBorrow" class="primary-action">Create borrow position</button><p class="fee-note">Factory creation fee ${CREATION_FEE_ETH} ETH ${infoTip()}</p>
     </div>
-    <aside><div class="card preview-card"><h2>Position preview</h2><div id="borrowPreview"></div><div class="important">${infoTip()}<div><strong>Important</strong><p>If not repaid by the deadline, lenders can claim the collateral fallback.</p></div></div></div><div class="card how-card"><h2>How it works</h2>${flow(['Funded', 'Repay by deadline', 'Fallback'], ['Lenders fund with USDC', 'Pay back USDC to reclaim', 'If unpaid, lenders claim collateral'])}</div></aside>
+    <aside><div class="card preview-card"><h2>Position preview</h2><div id="borrowPreview"></div><div class="important">${infoTip()}<div><strong>Important</strong><p>If not repaid by the deadline, P holders can redeem the collateral fallback.</p></div></div></div><div class="card split-card"><h2>PMFI P/N construction</h2>${splitModule()}</div></aside>
   </section>`
-  let token = { symbol: 'ARB', name: 'Arbitrum', decimals: 18, balance: 10000n * 10n ** 18n, demo: true }
+  let token = { symbol: 'TOKEN', name: '', decimals: 18, balance: 0n, loaded: false }
   let tokenAddress = ''
   const monthsToDate = (m) => { const d = new Date(); d.setMonth(d.getMonth() + Number(m)); return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) }
   const update = () => {
     const lock = Number($('lockAmount').value || 0), raise = Number($('raiseUsdc').value || 0), repay = Number($('repayUsdc').value || 0), months = Number($('termMonths').value || 6)
+    $('termLabel').textContent = `${months} ${months === 1 ? 'month' : 'months'}`
     const deadline = monthsToDate(months)
     $('borrowPreview').innerHTML = previewRows([
-      ['You lock', `${money(lock)} ${token.symbol}`], ['You receive', `${money(raise)} USDC when funded`], ['You keep', 'Reclaim right'], ['Repay to reclaim', `${money(repay)} USDC`], ['Deadline', deadline], ['Borrower cost', `${money(Math.max(repay - raise, 0))} USDC`], [`Borrower APR ${infoTip()}`, `<span class="green">${apr(raise, repay, nowSec(), nowSec() + months * 2628000).toFixed(1)}%</span>`], [`Collateral fallback ${infoTip()}`, `${money(lock)} ${token.symbol}`],
+      ['You lock', `${money(lock)} ${token.symbol}`], ['You receive', `${money(raise)} USDC when funded`], ['You keep', 'N reclaim option'], ['Repay to reclaim', `${money(repay)} USDC`], ['Deadline', deadline],
     ])
   }
   $('fetchToken').onclick = async () => {
     const input = $('collateral').value.trim()
-    if (!isAddress(input)) return status('Enter a valid ERC20 contract address, or keep using the clearly labelled demo token.', true)
+    if (!isAddress(input)) return status('Enter a valid ERC20 contract address.', true)
+    if (!account) return status('Connect wallet first so the app can fetch your token balance.', true)
     const erc20 = await contract(getAddress(input), abis.LegToken)
-    const [symbol, name, decimals, balance] = await Promise.all([erc20.symbol().catch(() => 'TOKEN'), erc20.name().catch(() => 'Custom token'), erc20.decimals().catch(() => 18n), account ? erc20.balanceOf(account).catch(() => 0n) : 0n])
-    token = { symbol, name, decimals: Number(decimals), balance, demo: false }
+    const [symbol, name, decimals, balance] = await Promise.all([erc20.symbol().catch(() => 'TOKEN'), erc20.name().catch(() => 'Custom token'), erc20.decimals().catch(() => 18n), erc20.balanceOf(account).catch(() => 0n)])
+    token = { symbol, name, decimals: Number(decimals), balance, loaded: true }
     tokenAddress = getAddress(input)
-    $('tokenBox').innerHTML = `${tokenIcon('custom')}<div><strong>${symbol}</strong><small>${name}</small></div><div class="balance"><small>Balance</small><strong>${fmt(balance, Number(decimals))} ${symbol}</strong></div><span>⌄</span>`
-    $('balanceHint').textContent = `Balance ${fmt(balance, Number(decimals))} ${symbol}`
+    $('tokenBox').hidden = false
+    $('tokenBox').innerHTML = `<div><strong>${symbol}</strong><small>${name}</small></div><div class="balance"><small>Wallet balance</small><strong>${fmt(balance, Number(decimals), 8)} ${symbol}</strong></div>`
+    $('balanceHint').textContent = `Balance ${fmt(balance, Number(decimals), 8)} ${symbol}`
+    if ($('useMax').checked) $('lockAmount').value = fmt(balance, Number(decimals), 8)
     update()
   }
-  $('maxLock').onclick = () => { $('lockAmount').value = token.demo ? '10000' : fmt(token.balance, token.decimals, 8); update() }
-  document.querySelectorAll('[data-pct]').forEach((b) => b.onclick = () => { document.querySelectorAll('[data-pct]').forEach((x) => x.classList.remove('active')); b.classList.add('active'); $('lockAmount').value = String((token.demo ? 10000 : Number(fmt(token.balance, token.decimals, 8))) * Number(b.dataset.pct) / 100); update() })
-  document.querySelectorAll('[data-months]').forEach((b) => b.onclick = () => { document.querySelectorAll('[data-months]').forEach((x) => x.classList.remove('active')); b.classList.add('active'); $('termMonths').value = b.dataset.months; update() })
+  $('useMax').onchange = () => { if ($('useMax').checked) $('lockAmount').value = fmt(token.balance, token.decimals, 8); update() }
   ;['lockAmount', 'raiseUsdc', 'repayUsdc', 'termMonths'].forEach((id) => $(id).oninput = update)
   $('createBorrow').onclick = async () => {
-    if (!account) return status('Connect wallet to create a real borrow position. Demo values are preview only.', true)
+    if (!account) return status('Connect wallet to create a real borrow position.', true)
     if (!tokenAddress) return status('Paste and fetch a real ERC20 collateral address before creating an on-chain vault.', true)
     const months = Number($('termMonths').value || 6)
     const maturity = BigInt(nowSec() + months * 2628000)
@@ -212,31 +198,32 @@ function renderBorrow() {
 function renderLend() {
   const rows = visibleMarkets()
   const selected = selectedMarket()
-  $('view').innerHTML = `<section class="lend-layout"><div class="card table-card"><h2>Open lend positions</h2><div class="table-tools"><div class="search-input"><span>⌕</span><input placeholder="Search token"></div><button class="sort">Highest APR ⌄</button></div><div class="market-table"><div class="thead"><span>Collateral</span><span>Raise</span><span>Repay</span><span>Term</span><span>APR ${infoTip()}</span><span>Available</span><span>Action</span></div>${rows.map(lendRow).join('')}</div></div><aside><div class="card action-card" id="lendPreview"></div><div class="card mini-flow">${flow(['Fund', 'Wait until deadline', 'Repay or fallback'], ['Lend USDC into the position', 'Borrower repays or deadline passes', 'Earn repayment or claim collateral'])}</div></aside></section>`
+  $('view').innerHTML = `<section class="lend-layout"><div class="card table-card"><h2>Open lend positions</h2><div class="table-tools"><div class="search-input"><span>⌕</span><input placeholder="Search token"></div><button class="sort">Highest APR ⌄</button></div><div class="market-table"><div class="thead"><span>Collateral</span><span>Raise</span><span>Repay</span><span>Term</span><span>APR ${infoTip()}</span><span>Available</span><span>Action</span></div>${rows.length ? rows.map(lendRow).join('') : '<div class="empty-state">No live lend listings found yet.</div>'}</div></div><aside><div class="card action-card" id="lendPreview"></div><div class="card split-card">${splitModule()}</div></aside></section>`
   document.querySelectorAll('[data-select-market]').forEach((b) => b.onclick = () => { selectedLendId = b.dataset.selectMarket; renderLend() })
-  $('lendPreview').innerHTML = lendPreview(selected)
-  $('fundPosition').onclick = () => selected.demo ? status('This is demo data for preview, not a live on-chain listing. Real listings will become fundable when available.', true) : status('Real marketplace funding remains supported when MARKETPLACE_ADDRESS is configured.', true)
+  $('lendPreview').innerHTML = selected ? lendPreview(selected) : '<h2>Lend into position</h2><p class="hint">Live P listings will appear here once available.</p>'
+  if ($('fundPosition')) $('fundPosition').onclick = () => status('Marketplace funding will be enabled when a marketplace contract address is configured.', true)
 }
 function lendRow(m) {
   const active = m.id === selectedLendId ? 'selected' : ''
-  return `<div class="trow ${active}"><span class="asset-cell">${tokenIcon(m.logo)}<span><strong>${m.token}${m.demo ? '<em>Demo</em>' : ''}</strong><small>${m.name}</small></span></span><span>${money(m.raise)} USDC</span><span>${money(m.repay)} USDC</span><span>${m.term}</span><span class="green">${m.apr.toFixed(1)}%</span><span>${money(m.available)} USDC</span><button data-select-market="${m.id}" class="link-btn">View</button></div>`
+  return `<div class="trow ${active}"><span class="asset-cell">${tokenIcon(m.logo)}<span><strong>${m.token}</strong><small>${m.name}</small></span></span><span>${money(m.raise)} USDC</span><span>${money(m.repay)} USDC</span><span>${m.term}</span><span class="green">${m.apr.toFixed(1)}%</span><span>${money(m.available)} USDC</span><button data-select-market="${m.id}" class="link-btn">View</button></div>`
 }
 function lendPreview(m) {
-  return `<h2>Lend into position</h2><div class="asset-large">${tokenIcon(m.logo)}<div><strong>${m.token}${m.demo ? '<em>Demo</em>' : ''}</strong><small>${m.name}</small></div></div>${previewRows([['Available to fund', `${money(m.available)} USDC`]])}<label>USDC to lend</label><div class="unit-input"><input value="${money(m.available)}"><span>◉ USDC</span></div><div class="quick-row"><button>25%</button><button>50%</button><button class="active">MAX</button></div>${previewRows([['You pay', `${money(m.available)} USDC`], ['You receive if repaid', `${money(m.available * (m.repay / m.raise))} USDC`], ['Term', m.term.replace('m', ' months')], [`Lender APR ${infoTip()}`, `<span class="green">${m.apr.toFixed(1)}%</span>`], [`Collateral fallback ${infoTip()}`, `${money(m.collateral * (m.available / m.raise))} ${m.token}`], ['Deadline', m.deadline]])}<div class="important">${infoTip()}<div><strong>Important</strong><p>If the borrower does not repay by the deadline, lenders can claim the collateral fallback.</p></div></div><button id="fundPosition" class="primary-action">Fund position</button>`
+  return `<h2>Lend into position</h2><div class="asset-large">${tokenIcon(m.logo)}<div><strong>${m.token}</strong><small>${m.name}</small></div></div>${previewRows([['Available to fund', `${money(m.available)} USDC`]])}<label>USDC to lend</label><div class="unit-input"><input value="${money(m.available)}"><span>◉ USDC</span></div>${previewRows([['You pay', `${money(m.available)} USDC`], ['You receive if repaid', `${money(m.available * (m.repay / m.raise))} USDC`], ['Term', m.term.replace('m', ' months')], [`Lender APR ${infoTip()}`, `<span class="green">${m.apr.toFixed(1)}%</span>`], ['Deadline', m.deadline]])}<div class="important">${infoTip()}<div><strong>Important</strong><p>If the borrower does not repay by the deadline, lenders can claim the collateral fallback.</p></div></div><button id="fundPosition" class="primary-action">Fund position</button>`
 }
 
 function renderPortfolio() {
-  $('view').innerHTML = `<section class="portfolio"><div class="card table-card"><h2>Your borrow positions</h2>${portfolioTable(['Collateral', 'Locked', 'Repay', 'Deadline', 'Status', 'Action'], demoBorrowPositions.map((p) => [asset(p), p.locked, p.repay, p.deadline, badge(p.status), '<button class="link-btn">View</button>']))}</div><div class="card table-card"><h2>Your lend positions</h2>${portfolioTable(['Collateral', 'Funded', 'Receive if repaid', 'Deadline', 'Status', 'Action'], demoLendPositions.map((p) => [asset(p), p.funded, p.receive, p.deadline, badge(p.status), '<button class="link-btn">View</button>']))}</div></section>`
+  $('view').innerHTML = `<section class="portfolio"><div class="card table-card"><h2>Your borrow positions</h2><div class="empty-state">Connect wallet and create a market to track borrower positions here.</div></div><div class="card table-card"><h2>Your lend positions</h2><div class="empty-state">Live funded P positions will appear here.</div></div></section>`
 }
-function asset(p) { return `<span class="asset-cell">${tokenIcon(p.logo)}<span><strong>${p.token}<em>Demo</em></strong><small>${p.name}</small></span></span>` }
+function asset(p) { return `<span class="asset-cell">${tokenIcon(p.logo)}<span><strong>${p.token}</strong><small>${p.name}</small></span></span>` }
 function badge(statusText) { return `<span class="badge ${statusText.toLowerCase()}">${statusText}</span>` }
 function portfolioTable(head, rows) { return `<div class="portfolio-table"><div class="portfolio-head">${head.map((h) => `<span>${h}</span>`).join('')}</div>${rows.map((r) => `<div class="portfolio-row">${r.map((c) => `<span>${c}</span>`).join('')}</div>`).join('')}</div>` }
-function previewRows(rows) { return `<div class="preview-rows">${rows.map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`).join('')}</div>` }
-function flow(titles, subs) { return `<div class="flow">${titles.map((title, i) => `<div><div class="flow-icon">${i === 0 ? '♙' : i === 1 ? '□' : '♢'}</div><strong>${title}</strong><small>${subs[i]}</small></div>${i < titles.length - 1 ? '<span class="arrow">→</span>' : ''}`).join('')}</div>` }
 
+function splitModule() { return `<div class="split-module"><div class="split-diagram"><div class="split-top">Collateral</div><div class="split-line"></div><div class="split-legs"><div><strong>P</strong><span>Lender claim</span></div><div><strong>N</strong><span>Reclaim option</span></div></div><small>P + N are minted from the same locked collateral amount.</small></div><div class="split-copy"><p><strong>P token</strong> is the lender claim. It is sold for USDC to activate funding.</p><p><strong>N token</strong> stays with the borrower as the repay-to-reclaim option.</p><p>No oracle or liquidation path is used. At expiry, repayment sends USDC to P holders; non-repayment leaves collateral redeemable by P holders.</p></div></div>` }
+
+function previewRows(rows) { return `<div class="preview-rows">${rows.map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`).join('')}</div>` }
 async function boot() {
   app.innerHTML = '<div class="shell"><div class="notice">Loading PMFI interface…</div></div>'
-  try { await loadAbis() } catch (error) { notice = `ABI files could not be loaded. The demo UI is still available. ${error.message || error}` }
+  try { await loadAbis() } catch (error) { notice = 'ABI files could not be loaded. Contract actions are temporarily unavailable.' }
   try {
     if (window.ethereum) {
       provider = new BrowserProvider(window.ethereum)
@@ -244,7 +231,7 @@ async function boot() {
       if (accounts[0]) { signer = await provider.getSigner(); account = await signer.getAddress() }
     }
     await loadOnchainMarkets()
-  } catch (error) { notice = `Wallet or RPC initialization failed. Showing demo mode. ${error.message || error}` }
+  } catch (error) { notice = 'Wallet or RPC initialization failed. The interface is still available for token entry.' }
   await render()
 }
 boot().catch((error) => { app.innerHTML = `<div class="shell"><div class="notice danger"><strong>Could not initialize.</strong> ${error.message || error}</div></div>` })
