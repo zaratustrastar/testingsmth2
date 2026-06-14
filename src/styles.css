@@ -81,12 +81,6 @@ aside { display: grid; gap: 1rem; }
 @media (max-width: 1080px) { .borrow-layout, .lend-layout { grid-template-columns: 1fr; } .table-tools, .two-cols { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .shell { padding: 1rem; } .tabs { margin-inline: -1rem; padding-inline: 1rem; } .topbar { align-items: flex-start; flex-direction: column-reverse; } .quick-row { grid-template-columns: 1fr; } .thead { display: none; } .trow, .portfolio-head, .portfolio-row { grid-template-columns: 1fr; } }
 
-.switch { display: inline-flex; align-items: center; gap: 0.55rem; margin: 0; white-space: nowrap; color: var(--green); }
-.switch input { display: none; }
-.switch span { width: 42px; height: 24px; border-radius: 999px; background: #dce4ef; position: relative; display: inline-block; }
-.switch span::after { content: ''; position: absolute; width: 18px; height: 18px; top: 3px; left: 3px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(9,18,53,.2); transition: .15s ease; }
-.switch input:checked + span { background: var(--green); }
-.switch input:checked + span::after { transform: translateX(18px); }
 .term-label { float: right; color: var(--green); }
 .empty-state { padding: 2rem 1rem; color: var(--blue); text-align: center; border: 1px dashed var(--line); border-radius: 1rem; margin-top: 1rem; }
 .split-card { padding: 1.2rem; }
@@ -101,3 +95,6 @@ aside { display: grid; gap: 1rem; }
 .split-copy p { margin: 0 0 .7rem; color: var(--blue); line-height: 1.45; }
 .split-copy strong { color: var(--navy); }
 @media (max-width: 720px) { .split-module { grid-template-columns: 1fr; } }
+.split-copy ol { margin: 0; padding-left: 1.2rem; color: var(--blue); line-height: 1.65; }
+.split-copy li { margin: 0.2rem 0; }
+.amount-row { margin-bottom: 0.35rem; }
