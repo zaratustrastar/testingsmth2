@@ -111,3 +111,17 @@ aside { display: grid; gap: 1rem; }
 .outcome-stack { display: grid; gap: .6rem; }
 @media (max-width: 720px) { .split-module, .lend-flow { grid-template-columns: 1fr; } .flow-arrow { text-align: center; transform: rotate(90deg); } }
 .amount-row { margin-bottom: 0.35rem; }
+button:disabled { cursor: not-allowed; opacity: 0.5; border-color: var(--line); }
+.registry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; margin: .5rem 0 1rem; }
+.registry-section { border: 1px solid var(--line); border-radius: .9rem; padding: .75rem; background: var(--soft); }
+.registry-section h3 { margin: 0 0 .55rem; font-size: .88rem; color: var(--blue); }
+.registry-token { display: grid; gap: .15rem; width: 100%; text-align: left; margin-top: .45rem; padding: .65rem; background: #fff; }
+.registry-token span { color: var(--green); font-size: .75rem; font-weight: 850; }
+.registry-token:disabled span { color: var(--muted); }
+.status-pill { display: inline-flex; margin-top: .35rem; padding: .2rem .5rem; border-radius: 999px; font-size: .75rem; font-weight: 850; background: #edf2ff; color: var(--blue); }
+.status-pill.ok { background: var(--green-soft); color: var(--green); }
+.status-pill.review { background: #fff7e6; color: #9a6700; }
+.tx-steps, .result-links { display: grid; gap: .45rem; margin: 1rem 0; padding: .8rem; border: 1px solid var(--line); border-radius: .85rem; background: var(--soft); color: var(--blue); }
+.result-links strong { color: var(--navy); }
+.result-links span { display: block; }
+@media (max-width: 720px) { .registry-grid { grid-template-columns: 1fr; } }
