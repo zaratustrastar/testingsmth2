@@ -1,16 +1,15 @@
-import { BrowserProvider, Contract, Interface, formatEther, formatUnits, getAddress, isAddress, parseEther, parseUnits } from 'https://cdn.jsdelivr.net/npm/ethers@6.13.5/+esm'
+import { BrowserProvider, Contract, Interface, formatUnits, getAddress, parseUnits } from 'https://cdn.jsdelivr.net/npm/ethers@6.13.5/+esm'
 import { CONFIG } from './config.js'
-import { CANDIDATE_COLLATERAL } from './collateralRegistry.js'
 import { escapeHtml as e, sanitizeError, shortAddress, formatDate, money } from './format.js'
 import { LIMITS, validateBorrowForm, isWriteDisabled } from './validation.js'
 import { pAmountForBudget } from './quotes.js'
-import { fallbackProvider, readContract, writeContract, explorerLink } from './contracts.js'
+import { discoverCollateralTokens, searchTokens, sortTokensByWalletBalance } from './collateralDiscovery.js'
+import { fallbackProvider, readContract, explorerLink } from './contracts.js'
 
 const app = document.getElementById('app')
 const $ = (id) => document.getElementById(id)
 const STORAGE_KEY = 'pmfi-v22-borrow-draft'
 const MAX_VAULT_READS = 4
-const ZERO = '0x0000000000000000000000000000000000000000'
 
 let browserProvider
 let signer
@@ -25,7 +24,13 @@ let loadingPositions = true
 let loadError = ''
 let partialWarning = ''
 let markets = []
-let registryState = []
+let collateralTokens = []
+let collateralLoading = true
+let collateralError = ''
+let selectorOpen = false
+let selectorSearch = ''
+let formTouched = false
+let howOpen = false
 let factoryState = { creationPaused: false, purchasesPaused: false, creationFee: CONFIG.CREATION_FEE_WEI, minFunding: BigInt(LIMITS.MIN_FUNDING_SECONDS), maxFunding: BigInt(LIMITS.MAX_FUNDING_SECONDS), maxRepayment: BigInt(LIMITS.MAX_REPAYMENT_SECONDS) }
 let token = null
 let borrowResult = null
@@ -57,8 +62,10 @@ function clearNotice() { notice = ''; const el = $('notice'); if (el) el.hidden 
 function tokenIcon(kind = 'custom') { return `<span class="token-icon ${e(kind)}">${kind === 'arb' ? '◢' : kind === 'op' ? 'OP' : kind === 'uni' ? '◇' : kind === 'aave' ? 'A' : '•'}</span>` }
 function infoTip() { return '<span class="info">i</span>' }
 function saveDraft() {
-  const ids = ['collateral', 'lockAmount', 'raiseUsdc', 'repayUsdc', 'fundingHours', 'repaymentDays', 'namePrefix', 'symbolPrefix']
+  const ids = ['selectedCollateral', 'lockAmount', 'raiseUsdc', 'repayUsdc', 'fundingHours', 'repaymentDays']
   const draft = Object.fromEntries(ids.map((id) => [id, $(id)?.value || '']))
+  draft.selectedCollateral = token?.address || draft.selectedCollateral || ''
+  draft.selectedDecimals = token?.decimals ?? draft.selectedDecimals ?? ''
   localStorage.setItem(STORAGE_KEY, JSON.stringify(draft))
 }
 function readDraft() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') } catch { return {} } }
@@ -118,9 +125,33 @@ function setupWalletEvents() {
   window.ethereum.on?.('chainChanged', async () => { browserProvider = new BrowserProvider(window.ethereum); signer = account ? await browserProvider.getSigner() : undefined; chainId = Number((await browserProvider.getNetwork()).chainId); token = null; await refreshAll(); await render() })
 }
 
-async function refreshRegistry() {
-  const f = factory(true)
-  registryState = await Promise.all(CANDIDATE_COLLATERAL.map(async (candidate) => ({ ...candidate, allowed: await f.collateralAllowed(candidate.address).catch(() => false) })))
+async function discoverCollateral() {
+  collateralLoading = true
+  collateralError = ''
+  try {
+    const provider = providerForReads()
+    const f = factory(true)
+    const latest = await provider.getBlockNumber()
+    const topic = factoryIface.getEvent('CollateralAllowed').topicHash
+    collateralTokens = await discoverCollateralTokens({
+      fromBlock: CONFIG.FACTORY_DEPLOYMENT_BLOCK,
+      toBlock: latest,
+      getLogs: (fromBlock, toBlock) => provider.getLogs({ address: CONFIG.FACTORY_ADDRESS, topics: [topic], fromBlock: Number(fromBlock), toBlock: Number(toBlock) }),
+      parseLog: (log) => factoryIface.parseLog(log).args,
+      isAllowed: (address) => f.collateralAllowed(address),
+      readMetadata: async (address) => {
+        const c = readContract(address, CONFIG.ABIS.erc20, provider)
+        const [symbol, name, decimals, balance] = await Promise.all([
+          c.symbol().catch(() => 'TOKEN'), c.name().catch(() => ''), c.decimals().catch(() => 18n), account ? c.balanceOf(account).catch(() => 0n) : 0n,
+        ])
+        return { symbol, name, decimals, balance }
+      },
+    })
+    if (token && !collateralTokens.some((item) => item.address.toLowerCase() === token.address.toLowerCase())) token = null
+  } catch (error) {
+    collateralError = sanitizeError(error)
+    collateralTokens = []
+  } finally { collateralLoading = false }
 }
 async function refreshFactoryState() {
   const f = factory(true)
@@ -172,7 +203,7 @@ async function loadPositions() {
 }
 async function refreshAll() {
   try { await refreshFactoryState() } catch (error) { loadError = sanitizeError(error) }
-  try { await refreshRegistry() } catch {}
+  await discoverCollateral()
   await loadPositions()
 }
 
@@ -207,14 +238,24 @@ async function render() {
   }
 }
 
-function registryHtml() {
-  const section = (title, allowed) => `<div class="registry-section"><h3>${title}</h3>${registryState.filter((c) => c.allowed === allowed).map((c) => `<button class="registry-token" data-token="${e(c.address)}" ${allowed ? '' : 'disabled'}><strong>${e(c.symbol)}</strong><small>${e(c.category)} · ${e(c.reviewStatus)}${c.minimumMarketCap ? ` · screening ${e(c.minimumMarketCap)}` : ''}</small><span>${allowed ? 'Enabled by factory' : 'Under review'}</span></button>`).join('') || '<p class="hint">No tokens in this section.</p>'}</div>`
-  return `<div class="registry-grid">${section('Enabled collateral', true)}${section('Under review', false)}</div>`
+function tokenAvatar(symbol) { return `<span class="token-icon custom">${e(String(symbol || 'T').slice(0, 1).toUpperCase())}</span>` }
+function selectedTokenCard() {
+  if (!token) return '<button id="openTokenSelector" class="select-token-card"><span>Select collateral</span><strong>Choose token</strong><small>Enabled collateral only</small></button>'
+  return `<button id="openTokenSelector" class="select-token-card selected"><span>${tokenAvatar(token.symbol)}<strong>${e(token.symbol)}</strong></span><small>${e(token.name)} · ${shortAddress(token.address)}</small><em>Wallet balance ${e(fmt(token.balance, token.decimals, 8))}</em></button>`
+}
+function tokenRows(tokens, emptyText) {
+  return tokens.length ? tokens.map((item) => `<button class="token-row" data-select-collateral="${e(item.address)}"><span>${tokenAvatar(item.symbol)}</span><span><strong>${e(item.name)}</strong><small>${e(item.symbol)} · ${shortAddress(item.address)}</small></span><em>${e(fmt(item.balance, item.decimals, 8))}</em></button>`).join('') : `<p class="empty-state compact">${e(emptyText)}</p>`
+}
+function tokenSelectorModal() {
+  if (!selectorOpen) return ''
+  const searched = sortTokensByWalletBalance(searchTokens(collateralTokens, selectorSearch))
+  const owned = searched.filter((item) => item.balance > 0n)
+  return `<div class="modal-backdrop" id="selectorBackdrop"><div class="token-modal" role="dialog" aria-modal="true" aria-labelledby="tokenModalTitle"><div class="modal-head"><h2 id="tokenModalTitle">Select collateral</h2><button id="closeTokenSelector" class="modal-close" aria-label="Close token selector">×</button></div><div class="search-input token-search"><span>⌕</span><input id="tokenSearch" placeholder="Search tokens" value="${e(selectorSearch)}" autofocus></div>${collateralLoading ? '<div class="empty-state compact">Loading enabled collateral from factory events…</div>' : collateralError ? `<div class="notice danger"><strong>Collateral discovery failed.</strong> ${collateralError} <button id="retryCollateral" class="link-btn">Retry</button></div>` : `<section class="selector-section"><h3>Your tokens</h3>${tokenRows(owned, 'No enabled collateral with wallet balance found.')}</section><section class="selector-section"><h3>All enabled collateral</h3>${tokenRows(searched, 'No enabled collateral matches your search.')}</section>`}</div></div>`
 }
 function renderBorrow() {
   const draft = readDraft()
-  $('view').innerHTML = `<section class="borrow-layout"><div class="card form-card"><div class="card-head"><h2>Create borrow position</h2><span>V2.2 Base</span></div><label>Reviewed collateral</label>${registryHtml()}<label>Collateral token</label><div class="search-input"><span>⌕</span><input id="collateral" placeholder="Paste token contract address" value="${e(draft.collateral || '')}"><button id="fetchToken" class="fetch-btn">Fetch</button></div><div id="tokenBox" class="token-summary" hidden></div><label>Amount to lock <strong id="amountLabel" class="term-label">0%</strong></label><div class="amount-row"><input id="lockAmount" placeholder="0.00" value="${e(draft.lockAmount || '')}"></div><input id="amountPercent" type="range" min="0" max="100" value="0"><div class="two-cols"><label>USDC to raise ${infoTip()}<div class="unit-input"><input id="raiseUsdc" placeholder="0" value="${e(draft.raiseUsdc || '')}"><span>USDC</span></div></label><label>Total repayment ${infoTip()}<div class="unit-input"><input id="repayUsdc" placeholder="0" value="${e(draft.repayUsdc || '')}"><span>USDC</span></div></label></div><div class="two-cols"><label>Funding window ${infoTip()} <strong id="fundingLabel" class="term-label">24 hours</strong><input id="fundingHours" type="range" min="1" max="720" value="${e(draft.fundingHours || '24')}"></label><label>Repayment window ${infoTip()} <strong id="repaymentLabel" class="term-label">180 days</strong><input id="repaymentDays" type="range" min="1" max="365" value="${e(draft.repaymentDays || '180')}"></label></div><div class="two-cols"><label>Name prefix<div class="unit-input"><input id="namePrefix" maxlength="32" placeholder="opl TOKEN" value="${e(draft.namePrefix || '')}"></div></label><label>Symbol prefix<div class="unit-input"><input id="symbolPrefix" maxlength="32" placeholder="oplTOKEN" value="${e(draft.symbolPrefix || '')}"></div></label></div><div id="borrowProgress" class="tx-steps" hidden></div><button id="createBorrow" class="primary-action">Create borrow position</button><p class="fee-note">Factory creation fee ${CONFIG.CREATION_FEE_ETH} ETH ${infoTip()}</p></div><aside><div class="card preview-card"><h2>Position preview</h2><div id="borrowPreview"></div><div class="important">${infoTip()}<div><strong>Important</strong><p>If the sale is only partially filled, your required repayment is reduced according to the P amount actually funded.</p></div></div><div id="borrowResult"></div></div><div class="card split-card"><h2>How it works</h2>${splitModule('borrow')}</div></aside></section>`
-  document.querySelectorAll('[data-token]').forEach((b) => b.onclick = () => { $('collateral').value = b.dataset.token; fetchToken() })
+  if (!token && draft.selectedCollateral) token = collateralTokens.find((item) => item.address.toLowerCase() === String(draft.selectedCollateral).toLowerCase()) || null
+  $('view').innerHTML = `<section class="borrow-layout"><div class="card form-card"><div class="card-head"><h2>Create borrow position</h2><span>V2.2 Base</span></div><label>Select collateral</label><div id="selectedTokenBox">${selectedTokenCard()}</div><label>Amount to lock <strong id="amountLabel" class="term-label">0%</strong></label><div class="amount-row"><input id="lockAmount" placeholder="0.00" value="${e(draft.lockAmount || '')}"></div><input id="amountPercent" type="range" min="0" max="100" value="0"><div class="two-cols"><label>USDC to raise ${infoTip()}<div class="unit-input"><input id="raiseUsdc" placeholder="0" value="${e(draft.raiseUsdc || '')}"><span>USDC</span></div></label><label>Total repayment ${infoTip()}<div class="unit-input"><input id="repayUsdc" placeholder="0" value="${e(draft.repayUsdc || '')}"><span>USDC</span></div></label></div><div class="two-cols"><label>Funding window ${infoTip()} <strong id="fundingLabel" class="term-label">24 hours</strong><input id="fundingHours" type="range" min="1" max="720" value="${e(draft.fundingHours || '24')}"></label><label>Repayment window ${infoTip()} <strong id="repaymentLabel" class="term-label">180 days</strong><input id="repaymentDays" type="range" min="1" max="365" value="${e(draft.repaymentDays || '180')}"></label></div><div id="borrowProgress" class="tx-steps" hidden></div><button id="createBorrow" class="primary-action" disabled>Create borrow position</button><p class="fee-note">creation fee ${CONFIG.CREATION_FEE_ETH} ETH</p></div><aside><div class="card preview-card"><h2>Position preview</h2><div id="borrowPreview"></div><div id="borrowResult"></div></div><div class="card split-card"><button id="toggleHow" class="how-toggle">How it works <span>${howOpen ? '−' : '+'}</span></button><div class="how-body" ${howOpen ? '' : 'hidden'}>${splitModule('borrow')}</div></div></aside>${tokenSelectorModal()}</section>`
   const update = () => {
     const fundingHours = Number($('fundingHours').value || 24), repaymentDays = Number($('repaymentDays').value || 180)
     const fundingDeadline = nowSec() + fundingHours * 3600
@@ -224,42 +265,53 @@ function renderBorrow() {
     $('amountLabel').textContent = `${$('amountPercent').value || 0}%`
     const symbol = token?.symbol || 'TOKEN'
     $('borrowPreview').innerHTML = previewRows([
-      ['Collateral locked', `${e(money($('lockAmount').value || 0))} ${e(symbol)}`], ['Target USDC raise', `${e(money($('raiseUsdc').value || 0))} USDC`], ['Total repayment', `${e(money($('repayUsdc').value || 0))} USDC`], ['Funding deadline', formatDate(fundingDeadline)], ['Repayment deadline', formatDate(repaymentDeadline)], ['You keep', 'N reclaim right'], ['Default outcome', 'Lender can redeem funded collateral'], ['Creation fee', `${CONFIG.CREATION_FEE_ETH} ETH`],
+      ['Collateral locked', `${e(money($('lockAmount').value || 0))} ${e(symbol)}`], ['Target USDC raise', `${e(money($('raiseUsdc').value || 0))} USDC`], ['Total repayment', `${e(money($('repayUsdc').value || 0))} USDC`], ['Funding deadline', formatDate(fundingDeadline)], ['Repayment deadline', formatDate(repaymentDeadline)], ['You keep', 'N reclaim right'],
     ])
     saveDraft()
+    $('createBorrow').disabled = !isBorrowFormReady()
   }
-  async function fetchToken() {
-    try {
-      const input = $('collateral').value.trim()
-      if (!isAddress(input)) return setNoticeText('Enter a valid ERC20 contract address.', true)
-      if (!account) return setNoticeText('Connect wallet first so the app can fetch your token balance.', true)
-      const address = getAddress(input)
-      const c = readContract(address, CONFIG.ABIS.erc20, providerForReads())
-      const [symbol, name, decimals, balance, allowed] = await Promise.all([c.symbol().catch(() => 'TOKEN'), c.name().catch(() => 'Custom token'), c.decimals().catch(() => 18n), c.balanceOf(account).catch(() => 0n), factory(true).collateralAllowed(address).catch(() => false)])
-      token = { address, symbol: String(symbol), name: String(name), decimals: Number(decimals), balance, allowed, isUsdc: address.toLowerCase() === CONFIG.BASE_USDC.toLowerCase() }
-      $('tokenBox').hidden = false
-      $('tokenBox').innerHTML = `<div><strong>${e(token.symbol)}</strong><small>${e(token.name)}</small></div><div class="balance"><small>Wallet balance</small><strong>${e(fmt(balance, token.decimals, 8))}</strong><span class="status-pill ${allowed ? 'ok' : 'review'}">${allowed ? 'Enabled by factory' : 'Under review / disabled'}</span></div>`
-      $('namePrefix').value ||= `opl ${token.symbol}`.slice(0, 32)
-      $('symbolPrefix').value ||= `opl${token.symbol}`.slice(0, 32)
-      update()
-    } catch (error) { setNotice(`<strong>Fetch token</strong> failed: ${sanitizeError(error)}`, true) }
-  }
-  $('fetchToken').onclick = fetchToken
-  $('amountPercent').oninput = () => { if (token) $('lockAmount').value = fmt((token.balance * BigInt($('amountPercent').value || 0)) / 100n, token.decimals, 8); update() }
-  ;['lockAmount', 'raiseUsdc', 'repayUsdc', 'fundingHours', 'repaymentDays', 'namePrefix', 'symbolPrefix'].forEach((id) => $(id).oninput = update)
-  $('createBorrow').onclick = async () => createBorrowPosition(update)
+  $('openTokenSelector')?.addEventListener('click', () => { selectorOpen = true; renderBorrow() })
+  $('closeTokenSelector')?.addEventListener('click', () => { selectorOpen = false; renderBorrow() })
+  $('selectorBackdrop')?.addEventListener('click', (event) => { if (event.target.id === 'selectorBackdrop') { selectorOpen = false; renderBorrow() } })
+  $('retryCollateral')?.addEventListener('click', async () => { await discoverCollateral(); renderBorrow() })
+  $('tokenSearch')?.addEventListener('input', (event) => { selectorSearch = event.target.value; renderBorrow() })
+  document.querySelectorAll('[data-select-collateral]').forEach((button) => button.onclick = () => {
+    const selected = collateralTokens.find((item) => item.address.toLowerCase() === button.dataset.selectCollateral.toLowerCase())
+    if (!selected) return
+    token = selected
+    selectorOpen = false
+    selectorSearch = ''
+    $('lockAmount').value = ''
+    $('amountPercent').value = '0'
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...readDraft(), selectedCollateral: token.address, selectedDecimals: token.decimals, lockAmount: '' }))
+    renderBorrow()
+  })
+  $('amountPercent').oninput = () => { if (token) $('lockAmount').value = fmt((token.balance * BigInt($('amountPercent').value || 0)) / 100n, token.decimals, 8); formTouched = true; update() }
+  ;['lockAmount', 'raiseUsdc', 'repayUsdc', 'fundingHours', 'repaymentDays'].forEach((id) => $(id).oninput = () => { formTouched = true; update() })
+  $('toggleHow')?.addEventListener('click', () => { howOpen = !howOpen; renderBorrow() })
+  $('createBorrow').onclick = async () => { formTouched = true; await createBorrowPosition(update) }
   if (borrowResult) $('borrowResult').innerHTML = borrowResult
   update()
 }
+function generatedNamePrefix() { return `opl ${String(token?.symbol || 'TOKEN')}`.slice(0, 32) }
+function generatedSymbolPrefix() { return `opl${String(token?.symbol || 'TOKEN')}`.slice(0, 32) }
+function isBorrowFormReady() {
+  if (!account || !token || !token.allowed || factoryState.creationPaused || !isBase()) return false
+  const lock = Number($('lockAmount')?.value || 0), raise = Number($('raiseUsdc')?.value || 0), repay = Number($('repayUsdc')?.value || 0)
+  return Number.isFinite(lock) && lock > 0 && Number.isFinite(raise) && raise > 0 && Number.isFinite(repay) && repay > raise
+}
 async function createBorrowPosition(update) {
   if (!token) return setNoticeText('Fetch an enabled collateral token first.', true)
+  const liveAllowed = await factory(true).collateralAllowed(token.address).catch(() => false)
+  if (!liveAllowed) return setNoticeText('Selected collateral is no longer enabled by the onchain factory allowlist.', true)
+  token.allowed = true
   const collateralAmount = parseAmount($('lockAmount').value, token.decimals)
   const targetRaise = parseAmount($('raiseUsdc').value, 6)
   const totalRepayment = parseAmount($('repayUsdc').value, 6)
   const fundingSeconds = Number($('fundingHours').value || 24) * 3600
   const repaymentSeconds = secondsFromDays($('repaymentDays').value || 180)
   const ethBalance = account && browserProvider ? await browserProvider.getBalance(account).catch(() => 0n) : 0n
-  const errors = validateBorrowForm({ connected: Boolean(account), wrongNetwork: account && !isBase(), creationPaused: factoryState.creationPaused, collateralAllowed: token.allowed, collateralIsUsdc: token.isUsdc, collateralAmount, targetRaise, totalRepayment, fundingSeconds, repaymentSeconds, namePrefix: $('namePrefix').value, symbolPrefix: $('symbolPrefix').value, decimals: token.decimals, balance: token.balance, ethBalance })
+  const errors = validateBorrowForm({ connected: Boolean(account), wrongNetwork: account && !isBase(), creationPaused: factoryState.creationPaused, collateralAllowed: token.allowed, collateralIsUsdc: token.isUsdc, collateralAmount, targetRaise, totalRepayment, fundingSeconds, repaymentSeconds, namePrefix: generatedNamePrefix(), symbolPrefix: generatedSymbolPrefix(), decimals: token.decimals, balance: token.balance, ethBalance })
   if (errors.length) return setNoticeText(errors.join('; '), true)
   const progress = $('borrowProgress'); progress.hidden = false; progress.innerHTML = '<span>Step 1: Approve collateral — pending</span><span>Step 2: Create position — waiting</span>'
   const collateral = erc20(token.address, false)
@@ -272,7 +324,7 @@ async function createBorrowPosition(update) {
   progress.innerHTML = '<span>Step 1: Approve collateral — complete</span><span>Step 2: Create position — pending</span>'
   const fundingDeadline = BigInt(nowSec() + fundingSeconds)
   const repaymentDeadline = fundingDeadline + BigInt(repaymentSeconds)
-  const params = { collateral: token.address, collateralAmount, targetRaiseUsdc: targetRaise, totalRepaymentUsdc: totalRepayment, fundingDeadline, repaymentDeadline, namePrefix: $('namePrefix').value, symbolPrefix: $('symbolPrefix').value }
+  const params = { collateral: token.address, collateralAmount, targetRaiseUsdc: targetRaise, totalRepaymentUsdc: totalRepayment, fundingDeadline, repaymentDeadline, namePrefix: generatedNamePrefix(), symbolPrefix: generatedSymbolPrefix() }
   const result = await sendTx('Create position', async (phase) => { phase('awaiting wallet confirmation…'); return factory(false).createPosition(params, { value: CONFIG.CREATION_FEE_WEI }) })
   const event = parsePositionCreated(result.receipt)
   borrowResult = `<div class="result-links"><strong>Created position</strong><span>Vault ${addressLink(event.vault)}</span><span>P token ${addressLink(event.pToken)}</span><span>N token ${addressLink(event.nToken)}</span><span>Sale ID ${e(event.saleId.toString())}</span><span>Tx ${txLink(result.tx.hash)}</span></div>`
@@ -283,11 +335,12 @@ async function createBorrowPosition(update) {
 function renderLend() {
   const rows = liveOpenMarkets()
   const selected = selectedMarket()
-  $('view').innerHTML = `<section class="lend-layout"><div class="card table-card"><h2>Open lend positions</h2><div class="table-tools"><div class="search-input"><span>⌕</span><input placeholder="Search token"></div><button class="sort">Estimated APR ⌄</button></div><div class="market-table"><div class="thead"><span>Collateral</span><span>Raise</span><span>Repay</span><span>Funding</span><span>Estimated APR</span><span>Available</span><span>Action</span></div>${loadingPositions ? '<div class="empty-state">Loading live positions…</div>' : rows.length ? rows.map(lendRow).join('') : '<div class="empty-state">No live lend listings found yet.</div>'}</div></div><aside><div class="card action-card" id="lendPreview"></div><div class="card split-card"><h2>How it works</h2>${splitModule('lend')}</div></aside></section>`
+  $('view').innerHTML = `<section class="lend-layout"><div class="card table-card"><h2>Open lend positions</h2><div class="table-tools"><div class="search-input"><span>⌕</span><input placeholder="Search token"></div><button class="sort">Estimated APR ⌄</button></div><div class="market-table"><div class="thead"><span>Collateral</span><span>Raise</span><span>Repay</span><span>Funding</span><span>Estimated APR</span><span>Available</span><span>Action</span></div>${loadingPositions ? '<div class="empty-state">Loading live positions…</div>' : rows.length ? rows.map(lendRow).join('') : '<div class="empty-state">No live lend listings found yet.</div>'}</div></div><aside><div class="card action-card" id="lendPreview"></div><div class="card split-card"><button id="toggleHow" class="how-toggle">How it works <span>${howOpen ? '−' : '+'}</span></button><div class="how-body" ${howOpen ? '' : 'hidden'}>${splitModule('lend')}</div></div></aside></section>`
   document.querySelectorAll('[data-select-market]').forEach((b) => b.onclick = () => { selectedLendId = b.dataset.selectMarket; renderLend() })
   $('lendPreview').innerHTML = selected ? lendPreview(selected) : '<h2>Lend into position</h2><p class="hint">Live V2.2 P listings will appear here once available.</p>'
   $('fundPosition')?.addEventListener('click', () => fundSelected(selected))
   $('budgetUsdc')?.addEventListener('input', () => updateBudgetQuote(selected))
+  $('toggleHow')?.addEventListener('click', () => { howOpen = !howOpen; renderLend() })
 }
 function fillPct(m) { return m.initialCollateralAmount ? Number((m.funded * 10000n) / m.initialCollateralAmount) / 100 : 0 }
 function estimatedApr(m) { return apr(Number(formatUnits(m.targetRaiseUsdc, 6)), Number(formatUnits(m.totalRepaymentUsdc, 6)), Number(m.fundingDeadline), Number(m.repaymentDeadline)) }
@@ -296,7 +349,7 @@ function lendRow(m) {
 }
 function lendPreview(m) {
   const fee = m.sale.usdcRemaining ? (m.sale.usdcRemaining * CONFIG.SALE_FEE_BPS) / 10000n : 0n
-  return `<h2>Lend into position</h2><div class="asset-large">${tokenIcon(m.logo)}<div><strong>${e(m.token)}</strong><small>${shortAddress(m.collateral)}</small></div></div>${previewRows([['P remaining', `${e(fmt(m.sale.amountRemaining, m.decimals, 6))} P`], ['Initial P', `${e(fmt(m.sale.amountInitial, m.decimals, 6))} P`], ['USDC remaining', `${e(fmt(m.sale.usdcRemaining, 6, 2))} USDC`], ['Target raise', `${e(fmt(m.targetRaiseUsdc, 6, 2))} USDC`], ['Total repayment', `${e(fmt(m.totalRepaymentUsdc, 6, 2))} USDC`], ['Funding deadline', formatDate(m.fundingDeadline)], ['Repayment deadline', formatDate(m.repaymentDeadline)], ['Fill', `${fillPct(m).toFixed(1)}%`], ['Estimated APR', `<span class="green">${estimatedApr(m).toFixed(1)}%</span>`], ['Marketplace fee estimate', `${e(fmt(fee, 6, 4))} USDC`], ['Default outcome', `${e(fmt(m.accountedCollateral, m.decimals, 6))} ${e(m.token)} collateral`], ['Vault', addressLink(m.vault)]])}<div class="two-cols"><label>P amount<div class="unit-input"><input id="pAmount" placeholder="0"></div></label><label>Max USDC budget<div class="unit-input"><input id="budgetUsdc" placeholder="0"><span>USDC</span></div></label></div><div id="budgetQuote" class="hint"></div><button id="fundPosition" class="primary-action" ${isWriteDisabled({ wrongNetwork: account && !isBase(), pending }) || factoryState.purchasesPaused ? 'disabled' : ''}>Fund position</button>`
+  return `<h2>Lend into position</h2><div class="asset-large">${tokenIcon(m.logo)}<div><strong>${e(m.token)}</strong><small>${shortAddress(m.collateral)}</small></div></div>${previewRows([['P remaining', `${e(fmt(m.sale.amountRemaining, m.decimals, 6))} P`], ['Initial P', `${e(fmt(m.sale.amountInitial, m.decimals, 6))} P`], ['USDC remaining', `${e(fmt(m.sale.usdcRemaining, 6, 2))} USDC`], ['Target raise', `${e(fmt(m.targetRaiseUsdc, 6, 2))} USDC`], ['Total repayment', `${e(fmt(m.totalRepaymentUsdc, 6, 2))} USDC`], ['Funding deadline', formatDate(m.fundingDeadline)], ['Repayment deadline', formatDate(m.repaymentDeadline)], ['Fill', `${fillPct(m).toFixed(1)}%`], ['Estimated APR', `<span class="green">${estimatedApr(m).toFixed(1)}%</span>`], ['Marketplace fee estimate', `${e(fmt(fee, 6, 4))} USDC`], ['Vault', addressLink(m.vault)]])}<div class="two-cols"><label>P amount<div class="unit-input"><input id="pAmount" placeholder="0"></div></label><label>Max USDC budget<div class="unit-input"><input id="budgetUsdc" placeholder="0"><span>USDC</span></div></label></div><div id="budgetQuote" class="hint"></div><button id="fundPosition" class="primary-action" ${isWriteDisabled({ wrongNetwork: account && !isBase(), pending }) || factoryState.purchasesPaused ? 'disabled' : ''}>Fund position</button>`
 }
 async function updateBudgetQuote(m) {
   if (!m) return

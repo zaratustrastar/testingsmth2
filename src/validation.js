@@ -25,8 +25,8 @@ export function validateBorrowForm({ connected, wrongNetwork, creationPaused, co
   if (totalRepayment <= targetRaise) errors.push('Total repayment must be greater than target raise')
   if (fundingSeconds < LIMITS.MIN_FUNDING_SECONDS || fundingSeconds > LIMITS.MAX_FUNDING_SECONDS) errors.push('Funding window must be between 1 hour and 30 days')
   if (repaymentSeconds <= 0 || repaymentSeconds > LIMITS.MAX_REPAYMENT_SECONDS) errors.push('Repayment window must be between 1 day and 365 days')
-  if (!validatePrefix(namePrefix)) errors.push('Name prefix must be 1–32 UTF-8 bytes')
-  if (!validatePrefix(symbolPrefix)) errors.push('Symbol prefix must be 1–32 UTF-8 bytes')
+  if (!validatePrefix(namePrefix)) errors.push('Position name must be 1–32 UTF-8 bytes')
+  if (!validatePrefix(symbolPrefix)) errors.push('Position symbol must be 1–32 UTF-8 bytes')
   if (balance < collateralAmount) errors.push('Insufficient collateral balance')
   if (ethBalance < CONFIG.CREATION_FEE_WEI) errors.push('Insufficient ETH for creation fee plus gas')
   return errors
